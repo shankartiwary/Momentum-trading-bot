@@ -1,0 +1,29 @@
+default:
+  symbol_initials: 'NIFTY' # Will be combined with expiry
+  underlying: 'NIFTY'
+  expiry: '26DEC24' # Example Expiry, format DDMMMYY
+  index_symbol: 'NIFTY 50'
+
+  pe_gap: 25.0
+  ce_gap: 25.0
+
+  pe_symbol_gap: 200
+  ce_symbol_gap: 200
+
+  pe_reset_gap: 50.0
+  ce_reset_gap: 50.0
+
+  pe_quantity: 1 # In Lots
+  ce_quantity: 1 # In Lots
+
+  pe_start_point: 0
+  ce_start_point: 0
+
+  min_price_to_sell: 10.0
+  sell_multiplier_threshold: 3
+
+  trans_type: 'SELL'
+  order_type: 'MARKET'
+  product_type: 'CARRYFORWARD'
+  exchange: 'NFO'
+  nifty_lot_size: 25 # Lot size for NIFTY, check Angel for current
