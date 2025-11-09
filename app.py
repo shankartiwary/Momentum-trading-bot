@@ -9,18 +9,16 @@ import threading
 import pandas as pd
 from queue import Queue, Empty
 
-# Configure logging
+# --- Initial Setup ---
+st.set_page_config(layout="wide")
+st.title("Survivor Trading Bot")
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-st.set_page_config(layout="wide")
-
-st.title("Survivor Trading Bot")
-
 # --- State Management & Helper Classes ---
-
 class AppState:
-    def __init__(self):
+    @staticmethod
+    def initialize():
         if 'initialized' not in st.session_state:
             st.session_state.initialized = True
             st.session_state.logged_in = False
@@ -32,36 +30,28 @@ class AppState:
             st.session_state.orders = []
             st.session_state.dry_run = True
 
-    @staticmethod
-    def get_state():
-        return AppState()
-
 class QueueLogHandler(logging.Handler):
     def __init__(self, queue):
         super().__init__()
         self.queue = queue
-
     def emit(self, record):
         self.queue.put(self.format(record))
 
 class OrderManager:
-    def __init__(self, app_state):
-        self.app_state = app_state
-
     def add_order(self, order):
-        # In a real app, this would be more complex (e.g., tracking status)
-        self.app_state.orders.append(order)
+        st.session_state.orders.append(order)
+
+# --- Initialize Session State ---
+AppState.initialize()
 
 # --- Trading Logic Thread ---
-
 def trading_loop(broker, config, log_queue, ltp_queue):
-    # Setup logging for this thread
-    thread_logger = logging.getLogger(__name__)
+    thread_logger = logging.getLogger(__name__ + "_thread")
     handler = QueueLogHandler(log_queue)
     thread_logger.addHandler(handler)
     thread_logger.setLevel(logging.INFO)
 
-    order_manager = OrderManager(st.session_state)
+    order_manager = OrderManager()
     strategy = SurvivorStrategy(broker, config, order_manager)
 
     thread_logger.info("Trading loop started.")
@@ -71,11 +61,10 @@ def trading_loop(broker, config, log_queue, ltp_queue):
             ltp = broker.fut_ltp()
             if ltp:
                 ltp_queue.put(ltp)
-                mock_ticks = {'last_price': ltp}
-                strategy.on_ticks_update(mock_ticks)
+                strategy.on_ticks_update({'last_price': ltp})
             else:
                 thread_logger.warning("Could not fetch LTP.")
-            time.sleep(10) # Poll every 10 seconds
+            time.sleep(10)
         except Exception as e:
             thread_logger.error(f"Error in trading loop: {e}", exc_info=True)
             time.sleep(10)
@@ -83,7 +72,6 @@ def trading_loop(broker, config, log_queue, ltp_queue):
     thread_logger.info("Trading loop stopped.")
 
 # --- Streamlit UI Components ---
-
 def show_login_page():
     st.header("Login to Angel One")
     with st.form("login_form"):
@@ -91,11 +79,11 @@ def show_login_page():
         client_code = st.text_input("Client Code")
         password = st.text_input("Password", type="password")
         totp_secret = st.text_input("TOTP Secret", type="password")
-        dry_run = st.checkbox("Dry Run (Simulation Mode)", value=st.session_state.dry_run)
+        dry_run = st.checkbox("Dry Run (Simulation Mode)", value=st.session_state.get('dry_run', True))
 
         if st.form_submit_button("Login"):
-            if not all([api_key, client_code, password, totp_secret]):
-                st.error("Please fill in all fields.")
+            if not all([api_key, client_code, password, totp_secret]) and not dry_run:
+                st.error("Please fill in all fields for live trading.")
             else:
                 with st.spinner("Logging in..."):
                     try:
@@ -106,23 +94,18 @@ def show_login_page():
                             dry_run=dry_run, logger=logger
                         )
                         broker.login()
-                        # For dry run, we can simulate a successful login
-                        is_connected = broker.is_connected() or dry_run
-
-                        if is_connected:
+                        if broker.is_connected() or dry_run:
                             st.session_state.broker = broker
                             st.session_state.logged_in = True
                             st.success("Login successful!")
                             st.experimental_rerun()
                         else:
-                            st.error("Login failed. Check credentials.")
+                            st.error("Live login failed. Check credentials.")
                     except Exception as e:
                         st.error(f"An error occurred: {e}")
 
 def show_dashboard():
     st.header("Dashboard")
-
-    # --- UI Layout ---
     col1, col2 = st.columns([1, 2])
 
     with col1:
@@ -132,9 +115,7 @@ def show_dashboard():
             if not os.path.exists(config_file):
                 st.error("survivor.yml not found!")
             else:
-                with open(config_file, 'r') as f:
-                    config = yaml.safe_load(f).get('default', {})
-
+                with open(config_file, 'r') as f: config = yaml.safe_load(f).get('default', {})
                 st.session_state.bot_running = True
                 thread = threading.Thread(
                     target=trading_loop,
@@ -143,14 +124,11 @@ def show_dashboard():
                 )
                 st.session_state.trading_thread = thread
                 thread.start()
-                st.info("Bot starting...")
                 st.experimental_rerun()
 
         if st.button("Stop Bot", disabled=not st.session_state.bot_running):
             st.session_state.bot_running = False
-            if st.session_state.trading_thread:
-                st.session_state.trading_thread.join(timeout=5)
-            st.info("Bot stopping...")
+            if st.session_state.trading_thread: st.session_state.trading_thread.join(timeout=5)
             st.experimental_rerun()
 
         if st.button("Logout"):
@@ -160,58 +138,46 @@ def show_dashboard():
         st.subheader("Status")
         status_color = "green" if st.session_state.bot_running else "red"
         st.markdown(f"**Bot Status:** <span style='color:{status_color};'>{'Running' if st.session_state.bot_running else 'Stopped'}</span>", unsafe_allow_html=True)
-
         mode = "Dry Run" if st.session_state.dry_run else "Live Trading"
         st.markdown(f"**Mode:** {mode}")
-
         st.subheader("NIFTY Future LTP")
         ltp_placeholder = st.empty()
 
     with col2:
         st.subheader("Logs")
         log_placeholder = st.empty()
-
         st.subheader("Trade Book")
         orders_placeholder = st.empty()
 
-    # --- UI Updates (non-blocking) ---
-
-    # Update LTP from queue
     try:
         latest_ltp = st.session_state.ltp_queue.get_nowait()
         st.session_state.last_ltp = latest_ltp
-        ltp_placeholder.metric("NIFTY Future", f"{latest_ltp:.2f}")
     except Empty:
-        if 'last_ltp' in st.session_state:
-            ltp_placeholder.metric("NIFTY Future", f"{st.session_state.last_ltp:.2f}")
+        pass # Keep last known LTP if queue is empty
 
-    # Update logs from queue
+    if 'last_ltp' in st.session_state:
+        ltp_placeholder.metric("NIFTY Future", f"{st.session_state.last_ltp:.2f}")
+
     log_messages = []
     while not st.session_state.log_queue.empty():
         log_messages.append(st.session_state.log_queue.get_nowait())
-
-    if 'log_history' not in st.session_state:
-        st.session_state.log_history = []
+    if 'log_history' not in st.session_state: st.session_state.log_history = []
     st.session_state.log_history.extend(log_messages)
-
-    log_display = "\\n".join(st.session_state.log_history[-20:]) # Show last 20 logs
+    log_display = "\\n".join(st.session_state.log_history[-20:])
     log_placeholder.text_area("Live Logs", log_display, height=300)
 
-    # Update orders display
     if st.session_state.orders:
-        orders_df = pd.DataFrame(st.session_state.orders)
-        orders_placeholder.dataframe(orders_df)
+        orders_placeholder.dataframe(pd.DataFrame(st.session_state.orders))
     else:
         orders_placeholder.info("No trades executed yet.")
 
-# --- Main App ---
-if __name__ == "__main__":
-    AppState.get_state()
-
-    if st.session_state.logged_in:
-        show_dashboard()
-        # Auto-refresh the UI to get live updates
-        time.sleep(2)
+# --- Main App Logic ---
+if st.session_state.logged_in:
+    show_dashboard()
+    time.sleep(2)
+    try:
         st.experimental_rerun()
-    else:
-        show_login_page()
+    except st.errors.RerunException:
+        pass
+else:
+    show_login_page()
