@@ -5,3 +5,4 @@ SmartAPI
 pyotp
 requests
 pycryptodome
+logzero
