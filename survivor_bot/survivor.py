@@ -10,26 +10,26 @@ class SurvivorStrategy:
     """
     Survivor Options Trading Strategy for Angel One (Single-Leg Version).
     """
-    
+
     def __init__(self, broker, config, order_manager):
         for key, value in config.items():
             setattr(self, key, value)
 
         self.broker = broker
         self.order_manager = order_manager
-        
+
         self.broker.underlying = self.underlying
         self.broker.expiry = self.expiry.upper()
 
         self._initialize_state()
-        
+
     def _nifty_quote(self):
         return self.broker.fut_ltp()
 
     def _initialize_state(self):
         self.pe_reset_gap_flag = 0
         self.ce_reset_gap_flag = 0
-        
+
         current_quote = self._nifty_quote()
         if not current_quote:
             logger.error("Could not fetch initial NIFTY quote. Retrying.")
@@ -40,7 +40,7 @@ class SurvivorStrategy:
 
         self.nifty_pe_last_value = self.pe_start_point or current_quote
         self.nifty_ce_last_value = self.ce_start_point or current_quote
-            
+
         logger.info(f"Init PE Start: {self.nifty_pe_last_value}, Init CE Start: {self.nifty_ce_last_value}")
 
     def on_ticks_update(self, ticks):
@@ -60,7 +60,7 @@ class SurvivorStrategy:
         if not instrument:
             logger.error(f"Could not find instrument details for {symbol}")
             return None, "Instrument not found"
-        
+
         token = instrument['token']
         lot_size = int(instrument.get('lotsize', self.nifty_lot_size))
         qty = quantity * lot_size
@@ -74,13 +74,13 @@ class SurvivorStrategy:
         price_diff = round(current_price - self.nifty_pe_last_value, 0)
         if price_diff > self.pe_gap:
             sell_multiplier = int(price_diff / self.pe_gap)
-            
+
             if self._check_sell_multiplier_breach(sell_multiplier):
                 return
 
             self.nifty_pe_last_value += self.pe_gap * sell_multiplier
             total_lots = sell_multiplier * self.pe_quantity
-            
+
             strike = self._find_closest_strike(current_price - self.pe_symbol_gap)
             symbol = f"{self.underlying}{self.expiry.upper()}{strike}PE"
 
@@ -101,16 +101,16 @@ class SurvivorStrategy:
         price_diff = round(self.nifty_ce_last_value - current_price, 0)
         if price_diff > self.ce_gap:
             sell_multiplier = int(price_diff / self.ce_gap)
-            
+
             if self._check_sell_multiplier_breach(sell_multiplier):
                 return
 
             self.nifty_ce_last_value -= self.ce_gap * sell_multiplier
             total_lots = sell_multiplier * self.ce_quantity
-            
+
             strike = self._find_closest_strike(current_price + self.ce_symbol_gap)
             symbol = f"{self.underlying}{self.expiry.upper()}{strike}CE"
-            
+
             logger.info(f"CE Trade Triggered: Selling {total_lots} lots of {symbol}")
 
             oid, msg = self._place_order(symbol, total_lots, "SELL")

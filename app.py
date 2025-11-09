@@ -4,7 +4,7 @@ import time
 import queue
 import logging
 import sys
-from bot import TradingBot
+from survivor_bot.bot import TradingBot
 
 # --- Helper for logging ---
 class QueueLogHandler(logging.Handler):

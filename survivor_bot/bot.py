@@ -1,7 +1,7 @@
 import threading
 import time
-from angelone import AngelBroker
-from survivor import SurvivorStrategy
+from .angelone import AngelBroker
+from .survivor import SurvivorStrategy
 
 class OrderManager:
     """A simple order manager to track trades."""
