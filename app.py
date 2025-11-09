@@ -1,183 +1,136 @@
 import streamlit as st
-from angelone import AngelBroker
-from survivor import SurvivorStrategy
-import logging
-import time
-import yaml
-import os
-import threading
 import pandas as pd
-from queue import Queue, Empty
+import time
+import queue
+import logging
+import sys
+from bot import TradingBot
 
-# --- Initial Setup ---
-st.set_page_config(layout="wide")
-st.title("Survivor Trading Bot")
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-
-# --- State Management & Helper Classes ---
-class AppState:
-    @staticmethod
-    def initialize():
-        if 'initialized' not in st.session_state:
-            st.session_state.initialized = True
-            st.session_state.logged_in = False
-            st.session_state.bot_running = False
-            st.session_state.broker = None
-            st.session_state.trading_thread = None
-            st.session_state.log_queue = Queue()
-            st.session_state.ltp_queue = Queue()
-            st.session_state.orders = []
-            st.session_state.dry_run = True
-
+# --- Helper for logging ---
 class QueueLogHandler(logging.Handler):
     def __init__(self, queue):
         super().__init__()
         self.queue = queue
+
     def emit(self, record):
         self.queue.put(self.format(record))
 
-class OrderManager:
-    def add_order(self, order):
-        st.session_state.orders.append(order)
+class StreamlitLogger:
+    def __init__(self, queue):
+        self.log_queue = queue
+        self.logger = logging.getLogger('TradingBotLogger')
+        if not self.logger.handlers:
+            self.logger.setLevel(logging.INFO)
+            formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+            queue_handler = QueueLogHandler(self.log_queue)
+            queue_handler.setFormatter(formatter)
+            self.logger.addHandler(queue_handler)
+            console_handler = logging.StreamHandler(sys.stdout)
+            console_handler.setFormatter(formatter)
+            self.logger.addHandler(console_handler)
 
-# --- Initialize Session State ---
-AppState.initialize()
+    def info(self, msg): self.logger.info(msg)
+    def warning(self, msg): self.logger.warning(msg)
+    def error(self, msg): self.logger.error(msg)
 
-# --- Trading Logic Thread ---
-def trading_loop(broker, config, log_queue, ltp_queue):
-    thread_logger = logging.getLogger(__name__ + "_thread")
-    handler = QueueLogHandler(log_queue)
-    thread_logger.addHandler(handler)
-    thread_logger.setLevel(logging.INFO)
+# --- Streamlit App Layout ---
+st.set_page_config(layout="wide")
+st.title("Trading Bot Controller")
 
-    order_manager = OrderManager()
-    strategy = SurvivorStrategy(broker, config, order_manager)
+# --- Session State Initialization ---
+if 'bot' not in st.session_state: st.session_state.bot = None
+if 'log_queue' not in st.session_state: st.session_state.log_queue = queue.Queue()
+if 'logger' not in st.session_state: st.session_state.logger = StreamlitLogger(st.session_state.log_queue)
+if 'status_queue' not in st.session_state: st.session_state.status_queue = queue.Queue()
+if 'is_connected' not in st.session_state: st.session_state.is_connected = False
 
-    thread_logger.info("Trading loop started.")
+# --- Sidebar for Configuration ---
+with st.sidebar:
+    st.header("Configuration")
+    with st.expander("API Credentials", expanded=True):
+        api_key = st.text_input("API Key", "YOUR_API_KEY")
+        client_code = st.text_input("Client Code", "YOUR_CLIENT_CODE")
+        password = st.text_input("Password", "YOUR_PASSWORD", type="password")
+        totp_secret = st.text_input("TOTP Secret", "YOUR_TOTP_SECRET")
+    with st.expander("Trading Parameters", expanded=True):
+        underlying = st.text_input("Underlying", "NIFTY")
+        expiry = st.text_input("Expiry (e.g., 26DEC24)", "26DEC24")
+        dry_run = st.checkbox("Dry Run (Paper Trading)", True)
+    with st.expander("Survivor Config"):
+        survivor_cfg_params = {
+            'pe_gap': st.number_input("Survivor: PE Gap", value=100),
+            'ce_gap': st.number_input("Survivor: CE Gap", value=100),
+            'pe_symbol_gap': st.number_input("Survivor: PE Symbol Gap", value=200),
+            'ce_symbol_gap': st.number_input("Survivor: CE Symbol Gap", value=200),
+            'pe_quantity': st.number_input("Survivor: PE Lots", value=1),
+            'ce_quantity': st.number_input("Survivor: CE Lots", value=1),
+        }
 
-    while st.session_state.get('bot_running', False):
-        try:
-            ltp = broker.fut_ltp()
-            if ltp:
-                ltp_queue.put(ltp)
-                strategy.on_ticks_update({'last_price': ltp})
-            else:
-                thread_logger.warning("Could not fetch LTP.")
-            time.sleep(10)
-        except Exception as e:
-            thread_logger.error(f"Error in trading loop: {e}", exc_info=True)
-            time.sleep(10)
-
-    thread_logger.info("Trading loop stopped.")
-
-# --- Streamlit UI Components ---
-def show_login_page():
-    st.header("Login to Angel One")
-    with st.form("login_form"):
-        api_key = st.text_input("API Key", type="password")
-        client_code = st.text_input("Client Code")
-        password = st.text_input("Password", type="password")
-        totp_secret = st.text_input("TOTP Secret", type="password")
-        dry_run = st.checkbox("Dry Run (Simulation Mode)", value=st.session_state.get('dry_run', True))
-
-        if st.form_submit_button("Login"):
-            if not all([api_key, client_code, password, totp_secret]) and not dry_run:
-                st.error("Please fill in all fields for live trading.")
-            else:
-                with st.spinner("Logging in..."):
-                    try:
-                        st.session_state.dry_run = dry_run
-                        broker = AngelBroker(
-                            api_key=api_key, client_code=client_code,
-                            password=password, totp_secret=totp_secret,
-                            dry_run=dry_run, logger=logger
-                        )
-                        broker.login()
-                        if broker.is_connected() or dry_run:
-                            st.session_state.broker = broker
-                            st.session_state.logged_in = True
-                            st.success("Login successful!")
-                            st.experimental_rerun()
-                        else:
-                            st.error("Live login failed. Check credentials.")
-                    except Exception as e:
-                        st.error(f"An error occurred: {e}")
-
-def show_dashboard():
-    st.header("Dashboard")
-    col1, col2 = st.columns([1, 2])
-
-    with col1:
-        st.subheader("Controls")
-        if st.button("Start Bot", disabled=st.session_state.bot_running):
-            config_file = "survivor.yml"
-            if not os.path.exists(config_file):
-                st.error("survivor.yml not found!")
-            else:
-                with open(config_file, 'r') as f: config = yaml.safe_load(f).get('default', {})
-                st.session_state.bot_running = True
-                thread = threading.Thread(
-                    target=trading_loop,
-                    args=(st.session_state.broker, config, st.session_state.log_queue, st.session_state.ltp_queue),
-                    daemon=True
-                )
-                st.session_state.trading_thread = thread
-                thread.start()
-                st.experimental_rerun()
-
-        if st.button("Stop Bot", disabled=not st.session_state.bot_running):
-            st.session_state.bot_running = False
-            if st.session_state.trading_thread: st.session_state.trading_thread.join(timeout=5)
-            st.experimental_rerun()
-
-        if st.button("Logout"):
-            st.session_state.clear()
-            st.experimental_rerun()
-
-        st.subheader("Status")
-        status_color = "green" if st.session_state.bot_running else "red"
-        st.markdown(f"**Bot Status:** <span style='color:{status_color};'>{'Running' if st.session_state.bot_running else 'Stopped'}</span>", unsafe_allow_html=True)
-        mode = "Dry Run" if st.session_state.dry_run else "Live Trading"
-        st.markdown(f"**Mode:** {mode}")
-        st.subheader("NIFTY Future LTP")
-        ltp_placeholder = st.empty()
-
-    with col2:
-        st.subheader("Logs")
-        log_placeholder = st.empty()
-        st.subheader("Trade Book")
-        orders_placeholder = st.empty()
-
-    try:
-        latest_ltp = st.session_state.ltp_queue.get_nowait()
-        st.session_state.last_ltp = latest_ltp
-    except Empty:
-        pass # Keep last known LTP if queue is empty
-
-    if 'last_ltp' in st.session_state:
-        ltp_placeholder.metric("NIFTY Future", f"{st.session_state.last_ltp:.2f}")
-
-    log_messages = []
-    while not st.session_state.log_queue.empty():
-        log_messages.append(st.session_state.log_queue.get_nowait())
-    if 'log_history' not in st.session_state: st.session_state.log_history = []
-    st.session_state.log_history.extend(log_messages)
-    log_display = "\\n".join(st.session_state.log_history[-20:])
-    log_placeholder.text_area("Live Logs", log_display, height=300)
-
-    if st.session_state.orders:
-        orders_placeholder.dataframe(pd.DataFrame(st.session_state.orders))
+# --- Main App Area ---
+col1, col2, col3 = st.columns(3)
+if col1.button("Start Bot"):
+    if st.session_state.bot is None:
+        bot_config = {
+            'API_KEY': api_key, 'CLIENT_CODE': client_code, 'PASSWORD': password, 'TOTP_SECRET': totp_secret,
+            'DRY_RUN': dry_run, 'UNDERLYING': underlying, 'EXPIRY': expiry, 'SURVIVOR_CFG': survivor_cfg_params
+        }
+        st.session_state.is_connected = False
+        st.session_state.bot = TradingBot(bot_config, st.session_state.logger, st.session_state.status_queue)
+        st.session_state.bot.start()
+        st.success("Bot started successfully!")
     else:
-        orders_placeholder.info("No trades executed yet.")
+        st.warning("Bot is already running.")
 
-# --- Main App Logic ---
-if st.session_state.logged_in:
-    show_dashboard()
-    time.sleep(2)
-    try:
-        st.experimental_rerun()
-    except st.errors.RerunException:
-        pass
+if col2.button("Stop Bot"):
+    if st.session_state.bot:
+        st.session_state.bot.stop()
+        st.session_state.bot = None
+        st.info("Bot stopped.")
+    else:
+        st.warning("Bot is not running.")
+
+if col3.button("Fire Test Order"):
+    if st.session_state.bot and st.session_state.is_connected:
+        st.session_state.bot.fire_test_order()
+    else:
+        st.warning("Bot must be running and connected.")
+
+# --- Display Status, Logs, and Trades ---
+status_indicator = st.empty()
+margin_col1, margin_col2 = st.columns(2)
+available_margin_ph = margin_col1.empty()
+used_margin_ph = margin_col2.empty()
+st.subheader("Trade History")
+trade_history_placeholder = st.empty()
+log_area = st.empty()
+
+# --- Update Loop ---
+if not st.session_state.status_queue.empty():
+    if st.session_state.status_queue.get() == "CONNECTED":
+        st.session_state.is_connected = True
+
+if st.session_state.bot and st.session_state.bot.is_alive():
+    if st.session_state.is_connected:
+        status_indicator.markdown('<span style="color:green">●</span> Connected to Broker', unsafe_allow_html=True)
+        funds = st.session_state.bot.get_funds()
+        if funds:
+            available_margin_ph.metric("Available Margin", f"₹ {funds['available']:,.2f}")
+            used_margin_ph.metric("Used Margin", f"₹ {funds['used']:,.2f}")
+    else:
+        status_indicator.markdown('<span style="color:red">●</span> Disconnected', unsafe_allow_html=True)
 else:
-    show_login_page()
+    status_indicator.markdown('<span style="color:red">●</span> Disconnected', unsafe_allow_html=True)
+
+if st.session_state.bot:
+    if st.session_state.bot.trade_history:
+        trade_history_placeholder.dataframe(pd.DataFrame(st.session_state.bot.trade_history))
+    else:
+        trade_history_placeholder.info("No trades yet.")
+
+log_messages = []
+while not st.session_state.log_queue.empty():
+    log_messages.insert(0, st.session_state.log_queue.get())
+log_area.text_area("Live Logs", "\\n".join(log_messages), height=400)
+
+time.sleep(2)
+st.rerun()
