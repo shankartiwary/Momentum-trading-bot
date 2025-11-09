@@ -1,6 +1,7 @@
 streamlit
 pyyaml
 pandas
-smartapi-python
+SmartAPI
 pyotp
 requests
+pycryptodome
