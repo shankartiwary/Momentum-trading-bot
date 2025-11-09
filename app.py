@@ -30,6 +30,7 @@ class AppState:
             st.session_state.log_queue = Queue()
             st.session_state.ltp_queue = Queue()
             st.session_state.orders = []
+            st.session_state.dry_run = True
 
     @staticmethod
     def get_state():
@@ -90,6 +91,7 @@ def show_login_page():
         client_code = st.text_input("Client Code")
         password = st.text_input("Password", type="password")
         totp_secret = st.text_input("TOTP Secret", type="password")
+        dry_run = st.checkbox("Dry Run (Simulation Mode)", value=st.session_state.dry_run)
 
         if st.form_submit_button("Login"):
             if not all([api_key, client_code, password, totp_secret]):
@@ -97,12 +99,17 @@ def show_login_page():
             else:
                 with st.spinner("Logging in..."):
                     try:
+                        st.session_state.dry_run = dry_run
                         broker = AngelBroker(
                             api_key=api_key, client_code=client_code,
-                            password=password, totp_secret=totp_secret, logger=logger
+                            password=password, totp_secret=totp_secret,
+                            dry_run=dry_run, logger=logger
                         )
                         broker.login()
-                        if broker.is_connected():
+                        # For dry run, we can simulate a successful login
+                        is_connected = broker.is_connected() or dry_run
+
+                        if is_connected:
                             st.session_state.broker = broker
                             st.session_state.logged_in = True
                             st.success("Login successful!")
@@ -153,6 +160,9 @@ def show_dashboard():
         st.subheader("Status")
         status_color = "green" if st.session_state.bot_running else "red"
         st.markdown(f"**Bot Status:** <span style='color:{status_color};'>{'Running' if st.session_state.bot_running else 'Stopped'}</span>", unsafe_allow_html=True)
+
+        mode = "Dry Run" if st.session_state.dry_run else "Live Trading"
+        st.markdown(f"**Mode:** {mode}")
 
         st.subheader("NIFTY Future LTP")
         ltp_placeholder = st.empty()
