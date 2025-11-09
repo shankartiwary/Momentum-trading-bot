@@ -55,7 +55,6 @@ with st.sidebar:
     with st.expander("Trading Parameters", expanded=True):
         underlying = st.text_input("Underlying", "NIFTY")
         expiry = st.text_input("Expiry (e.g., 26DEC24)", "26DEC24")
-        dry_run = st.checkbox("Dry Run (Paper Trading)", True)
     with st.expander("Survivor Config"):
         survivor_cfg_params = {
             'pe_gap': st.number_input("Survivor: PE Gap", value=100),
@@ -72,7 +71,7 @@ if col1.button("Start Bot"):
     if st.session_state.bot is None:
         bot_config = {
             'API_KEY': api_key, 'CLIENT_CODE': client_code, 'PASSWORD': password, 'TOTP_SECRET': totp_secret,
-            'DRY_RUN': dry_run, 'UNDERLYING': underlying, 'EXPIRY': expiry, 'SURVIVOR_CFG': survivor_cfg_params
+            'UNDERLYING': underlying, 'EXPIRY': expiry, 'SURVIVOR_CFG': survivor_cfg_params
         }
         st.session_state.is_connected = False
         st.session_state.bot = TradingBot(bot_config, st.session_state.logger, st.session_state.status_queue)

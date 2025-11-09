@@ -35,21 +35,18 @@ class TradingBot(threading.Thread):
                 client_code=self.config['CLIENT_CODE'],
                 password=self.config['PASSWORD'],
                 totp_secret=self.config['TOTP_SECRET'],
-                dry_run=self.config['DRY_RUN'],
                 logger=self.logger
             )
             self.broker.login()
 
-            if self.broker.is_connected() or self.config['DRY_RUN']:
+            if self.broker.is_connected():
                 self.logger.info("Broker connection successful.")
                 self.status_queue.put("CONNECTED")
 
-                # Initialize strategy
                 order_manager = OrderManager()
                 self.strategy = SurvivorStrategy(self.broker, self.config['SURVIVOR_CFG'], order_manager)
-                self.trade_history = order_manager.orders # Link trade history
+                self.trade_history = order_manager.orders
 
-                # Main trading loop
                 while self._is_running:
                     ltp = self.broker.fut_ltp()
                     if ltp:
@@ -74,7 +71,7 @@ class TradingBot(threading.Thread):
 
     def get_funds(self):
         """Fetches funds from the broker if connected."""
-        if self.broker and (self.broker.is_connected() or self.config['DRY_RUN']):
+        if self.broker and self.broker.is_connected():
             return self.broker.get_funds()
         return None
 
@@ -86,7 +83,6 @@ class TradingBot(threading.Thread):
 
         try:
             self.logger.info("Firing a test order.")
-            # This is a dummy order. Replace with a valid small order for your use case.
             symbol = f"{self.config['UNDERLYING']}{self.config['EXPIRY']}25000CE"
             instrument = self.broker.get_instrument_details(symbol)
             if not instrument:
