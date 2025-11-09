@@ -2,10 +2,15 @@ from datetime import datetime
 import math
 import time
 from typing import Optional, Tuple, Dict
+import logging
+import traceback
+
 try:
     from SmartApi import SmartConnect
     import pyotp
-except Exception:
+except ImportError:
+    logging.error("Failed to import SmartApi or pyotp. Please ensure the 'SmartAPI' and 'pyotp' packages are installed correctly.")
+    traceback.print_exc()
     SmartConnect = None
     pyotp = None
 

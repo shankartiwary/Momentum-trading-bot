@@ -29,9 +29,9 @@ class StreamlitLogger:
             console_handler.setFormatter(formatter)
             self.logger.addHandler(console_handler)
 
-    def info(self, msg): self.logger.info(msg)
-    def warning(self, msg): self.logger.warning(msg)
-    def error(self, msg): self.logger.error(msg)
+    def info(self, msg, *args, **kwargs): self.logger.info(msg, *args, **kwargs)
+    def warning(self, msg, *args, **kwargs): self.logger.warning(msg, *args, **kwargs)
+    def error(self, msg, *args, **kwargs): self.logger.error(msg, *args, **kwargs)
 
 # --- Streamlit App Layout ---
 st.set_page_config(layout="wide")
